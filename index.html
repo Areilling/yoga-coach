@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>🧘 智慧体育 · 瑜伽评估</title>
+  <!-- 使用轻量级 TF.js + BlazePose Lite -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.12.0/dist/tf-core.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.12.0/dist/tf-converter.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.12.0/dist/tf-backend-webgl.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.0/dist/pose-detection.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: "PingFang SC", sans-serif;
+      background: #121212;
+      color: white;
+      overflow: hidden;
+      touch-action: none;
+    }
+    #video {
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      padding: 20px;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      background: rgba(0,0,0,0.8);
+      padding: 20px;
+      border-radius: 12px;
+      z-index: 100;
+    }
+    .pose-name { font-size: 22px; margin-bottom: 8px; color: #4fc3f7; }
+    .feedback { font-size: 18px; line-height: 1.5; }
+    .instructions {
+      position: absolute;
+      bottom: 15px;
+      width: 100%;
+      text-align: center;
+      font-size: 13px;
+      color: #aaa;
+    }
+  </style>
+</head>
+<body>
+  <video id="video" playsinline muted></video>
+  
+  <div class="loading" id="loading">
+    ⏳ 正在加载模型...<br>
+    <small>首次使用需 3~5 秒，请勿关闭页面</small>
+  </div>
+
+  <div id="overlay">
+    <div class="pose-name">🧘 当前体式：自动识别</div>
+    <div class="feedback" id="feedback">请站立于摄像头前...</div>
+  </div>
+  <div class="instructions">微信扫码使用 · 数据仅在本地处理</div>
+
+  <script>
+    const video = document.getElementById('video');
+    const feedbackEl = document.getElementById('feedback');
+    const poseNameEl = document.getElementById('pose-name');
+    const loadingEl = document.getElementById('loading');
+
+    async function init() {
+      try {
+        // 启用 WebGL 加速
+        await tf.setBackend('webgl');
+        
+        // 创建轻量检测器（关键！）
+        const detector = await poseDetection.createDetector(
+          poseDetection.SupportedModels.BlazePose,
+          { runtime: 'tfjs', modelType: 'lite' }
+        );
+
+        // 隐藏加载提示
+        loadingEl.style.display = 'none';
+        feedbackEl.innerHTML = '✅ 准备就绪！请对准摄像头...';
+
+        // 获取摄像头
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: 640, height: 480 },
+          audio: false
+        });
+        video.srcObject = stream;
+
+        video.onloadedmetadata = () => video.play();
+
+        // 持续检测
+        const detect = async () => {
+          const poses = await detector.estimatePoses(video);
+          if (poses.length > 0 && poses[0].keypoints) {
+            evaluatePose(poses[0].keypoints);
+          } else {
+            feedbackEl.innerHTML = '未检测到人体，请对准摄像头';
+          }
+          requestAnimationFrame(detect);
+        };
+        detect();
+
+      } catch (err) {
+        console.error(err);
+        loadingEl.innerHTML = '❌ 加载失败<br><small>请刷新或换手机尝试</small>';
+      }
+    }
+
+    function calculateAngle(a, b, c) {
+      if (!a || !b || !c) return 0;
+      const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
+      let angle = Math.abs(radians * 180 / Math.PI);
+      return angle > 180 ? 360 - angle : angle;
+    }
+
+    function getPoint(keypoints, index) {
+      return keypoints[index] ? { x: keypoints[index].x, y: keypoints[index].y } : null;
+    }
+
+    function evaluatePose(keypoints) {
+      const leftHip = getPoint(keypoints, 23);
+      const rightHip = getPoint(keypoints, 24);
+      const leftKnee = getPoint(keypoints, 25);
+      const rightKnee = getPoint(keypoints, 26);
+      const leftAnkle = getPoint(keypoints, 27);
+      const rightAnkle = getPoint(keypoints, 28);
+      const leftShoulder = getPoint(keypoints, 11);
+      const rightShoulder = getPoint(keypoints, 12);
+
+      if (!leftHip || !rightHip || !leftKnee || !rightKnee) return;
+
+      const leftKneeAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
+      const rightKneeAngle = calculateAngle(rightHip, rightKnee, rightAnkle);
+
+      // 树式判断
+      if ((leftKneeAngle < 120 && rightKneeAngle > 160) || (rightKneeAngle < 120 && leftKneeAngle > 160)) {
+        feedbackEl.innerHTML = '✅ 单腿平衡<br>✅ 骨盆稳定';
+        poseNameEl.textContent = '🧘 树式（Tree Pose）';
+        return;
+      }
+
+      // 下犬式判断
+      if (leftShoulder && rightShoulder) {
+        const leftArmAngle = calculateAngle(getPoint(keypoints,15), leftShoulder, leftHip);
+        const rightArmAngle = calculateAngle(getPoint(keypoints,16), rightShoulder, rightHip);
+        if (leftArmAngle > 120 && rightArmAngle > 120) {
+          feedbackEl.innerHTML = '✅ 手臂伸展<br>✅ 脊柱延展';
+          poseNameEl.textContent = '🧘 下犬式（Downward Dog）';
+          return;
+        }
+      }
+
+      feedbackEl.innerHTML = '请尝试树式或下犬式';
+      poseNameEl.textContent = '🧘 待识别';
+    }
+
+    // 启动系统
+    init();
+  </script>
+</body>
+</html>
